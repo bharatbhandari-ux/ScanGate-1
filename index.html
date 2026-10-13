@@ -263,14 +263,18 @@ function otpScreen(r){
   $("#verify").onclick=async()=>{
     const otp=$("#otp").value.trim(); if(!otp){$("#err").innerHTML='<div class="msg err">Enter the OTP.</div>';return;}
     $("#verify").disabled=true;
-    try{ const r=await api("verify",{batch_id:S.batch,otp}); if(!r.ok) throw new Error(r.error||"Wrong OTP"); success(); }
+    try{ const r=await api("verify",{batch_id:S.batch,otp}); if(!r.ok) throw new Error(r.error||"Wrong OTP"); success(r.summary); }
     catch(e){ $("#verify").disabled=false; $("#err").innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
   };
 }
-function success(){
-  const s=stats(); nav("Handover complete");
-  $("#app").innerHTML=`${countsHtml(s)}<div class="msg info">${s.total} order${s.total===1?" is":"s are"} now out for delivery.${s.missing.length?` ${s.missing.length} missing order${s.missing.length===1?"":"s"} noted.`:""}</div>
-    <button class="btn" onclick="stores()">Back to stores</button>`;
+function success(sm){
+  nav("Handover complete");
+  const L=sm?{expected:sm.expected,scanned:sm.scanned,missing:sm.missing_list||[],extra:sm.extra_list||[],matched:sm.matched_list||[],total:sm.total_picked}
+           :(()=>{const s=stats();return {expected:s.expected,scanned:s.scanned,missing:s.missing,extra:s.extra,matched:s.matched,total:s.total};})();
+  const block=(title,list,cls,tag)=>`<h2 style="margin-top:14px">${title} (${list.length})</h2>`+(list.length?list.map(o=>`<div class="row ${cls}"><span>${esc(o)}</span><span class="tag">${tag}</span></div>`).join(""):`<p style="margin:0;color:var(--mute)">None</p>`);
+  $("#app").innerHTML=`<div class="msg info" style="margin:0 0 12px">Handover complete. The store has been sent a closure email.</div>${countsHtml(L)}
+    ${block("Missing orders",L.missing,"missing","Missing")}${block("Extra orders",L.extra,"extra","Extra")}${block("Scanned orders",L.matched,"matched","Scanned")}
+    <button class="btn" style="margin-top:16px" onclick="stores()">Back to stores</button>`;
 }
 
 /* ---------- add to home screen ---------- */
