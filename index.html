@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#14201b"><link rel="manifest" href="manifest.json"><link rel="apple-touch-icon" href="icon-192.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#14201b"><link rel="manifest" href="manifest.json"><link rel="icon" type="image/png" href="icon-192.png"><link rel="apple-touch-icon" href="icon-192.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <title>ScanGate</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 <style>
@@ -30,7 +30,7 @@ input:focus,select:focus,button:focus-visible{outline:3px solid #7bbf9b;outline-
 .counts{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:12px}
 .counts div{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 2px;text-align:center}
 .counts b{display:block;font-size:20px}
-.counts span{font-size:11px;color:var(--mute)}
+.counts span{font-size:11px;line-height:1.15;color:var(--mute);display:block}
 .counts .m b{color:var(--bad)}.counts .e b{color:var(--extra)}.counts .r b{color:var(--ok)}
 .row{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-radius:8px;margin-bottom:6px;font-size:15px;font-variant-numeric:tabular-nums;border:1px solid transparent}
 .row.pending{background:#eceee9;color:#8a948e}
@@ -53,6 +53,11 @@ input:focus,select:focus,button:focus-visible{outline:3px solid #7bbf9b;outline-
 .tabs{display:flex;gap:8px;margin-bottom:10px}
 .tabs button{flex:1;padding:8px;border-radius:8px;border:1px solid var(--line);background:#fff;font-size:14px}
 .tabs button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.chk{display:flex;align-items:center;gap:12px;padding:12px;margin:0 0 6px;border:1px solid var(--line);border-radius:8px;font-size:16px;font-variant-numeric:tabular-nums;color:var(--ink)}
+.chk input{width:22px;height:22px;flex:none;margin:0;accent-color:var(--ok)}
+.chk.all{background:var(--paper);font-weight:650}
+.exlist{max-height:36vh;overflow-y:auto;margin-bottom:8px;-webkit-overflow-scrolling:touch}
+.link{width:100%;background:none;border:0;color:var(--mute);font-size:15px;padding:12px;margin-top:4px}
 @media(prefers-reduced-motion:no-preference){.row{transition:background .25s}}
 </style>
 </head>
@@ -61,39 +66,29 @@ input:focus,select:focus,button:focus-visible{outline:3px solid #7bbf9b;outline-
 <main id="app"></main>
 
 <div class="modal" id="extraModal"><div class="sheet">
-  <h3>Order not assigned to you</h3>
-  <p id="extraId" style="font-weight:650;color:var(--ink);font-size:18px"></p>
-  <p>This order is not on this store's list. Accept it to add it to Extra.</p>
-  <button class="btn ok" id="acceptExtra">Accept order</button>
-  <button class="btn alt" id="rejectExtra">Reject order</button>
+  <h3 id="exTitle">Extra orders</h3>
+  <p id="exAsk">Did you return these orders to the store?</p>
+  <label class="chk all"><input type="checkbox" id="exAll"><span>Select all</span></label>
+  <div class="exlist" id="exList"></div>
+  <button class="btn ok" id="exAccept" disabled>Accept (Yes, returned)</button>
+  <button class="btn alt" id="exReject" disabled>Reject (No, keep order)</button>
+  <button class="link" id="exBack">Back to scanning</button>
 </div></div>
 
 <script src="config.js"></script>
 <script>
 /* ====== CONFIG ====== */
-const API_URL = window.API_URL || "";   // set in config.js. Empty = demo mode.
+const API_URL = window.API_URL || "";   // set in config.js (Apps Script web app URL ending in /exec)
+const REQUIRE_ALL_TICKED = false;       // true: Accept/Reject unlock only when every extra order is ticked. false: unlock when at least one is ticked and apply to the ticked ones.
+const DROPDOWN_ABOVE = 6;               // more stores than this -> store dropdown instead of buttons
 /* ==================== */
 
 const $ = s => document.querySelector(s);
-const S = { runner:null, pin:null, store:null, orders:[], scanned:new Set(), extras:new Set(), batch:null, scanner:null, scanning:false, started:false, finished:false, busy:false, lastScan:"", lastAt:0 };
+const S = { runner:null, pin:null, store:null, orders:[], scanned:new Set(), extras:new Set(), newExtras:new Set(), sel:new Set(), decisions:[], batch:null, scanner:null, scanning:false, started:false, finished:false, lastScan:"", lastAt:0 };
 
-/* ---------- API (demo data when API_URL is empty) ---------- */
-const DEMO = { stores:[{vendor:"V101",name:"Apollo Pharmacy, Andheri",count:6},{vendor:"V102",name:"MedPlus, Powai",count:4}],
-  orders:{V101:["PO1001","PO1002","PO1003","PO1004","PO1005","PO1006"],V102:["PO2001","PO2002","PO2003","PO2004"]} };
-let demoOtp=null, demoAt=0;
+/* ---------- API ---------- */
 async function api(action, data={}){
-  if(!API_URL){
-    await new Promise(r=>setTimeout(r,300));
-    if(action==="login") return {ok:true,name:data.runner_id};
-    if(action==="locations") return {ok:true,locations:[{city:"Mumbai",location:"Andheri"},{city:"Mumbai",location:"Powai"},{city:"Pune",location:"Hinjewadi"}]};
-    if(action==="register") return {ok:true};
-    if(action==="stores") return {ok:true,stores:DEMO.stores};
-    if(action==="orders") return {ok:true,orders:DEMO.orders[data.vendor]};
-    if(action==="done"){ if(!demoOtp||Date.now()-demoAt>6e5){demoOtp=String(Math.floor(1000+Math.random()*9000));demoAt=Date.now();}
-      console.log("DEMO OTP:",demoOtp); return {ok:true,batch_id:"DEMO-1",otp_sent:true}; }
-    if(action==="verify"){ if(Date.now()-demoAt>6e5) return {ok:false,error:"OTP expired. Scan again to get a new OTP."};
-      return data.otp===demoOtp?{ok:true}:{ok:false,error:"Wrong OTP. Check with the store and try again."}; }
-  }
+  if(!API_URL) throw new Error("App is not set up. Add the Apps Script URL in config.js.");
   const body = JSON.stringify({action, runner_id:S.runner, pin:S.pin, ...data});
   const res = await fetch(API_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body});
   return res.json();
@@ -101,72 +96,68 @@ async function api(action, data={}){
 
 /* ---------- helpers ---------- */
 const esc = s => String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-function nav(title, back){ $("#title").textContent=title+(API_URL?"":"  (DEMO)"); $("#back").classList.toggle("hidden",!back); $("#logout").classList.toggle("hidden",!S.runner); $("#back").onclick=back||null; }
+function nav(title, back){ $("#title").textContent=title; $("#back").classList.toggle("hidden",!back); $("#logout").classList.toggle("hidden",!S.runner); $("#back").onclick=back||null; }
 function stats(){
-  const matched=S.orders.filter(o=>S.scanned.has(o)), missing=S.orders.filter(o=>!S.scanned.has(o));
-  return {expected:S.orders.length, scanned:matched.length+S.extras.size, received:matched.length, missing, matched, extra:[...S.extras]};
+  const matched=S.orders.filter(o=>S.scanned.has(o)), missing=S.orders.filter(o=>!S.scanned.has(o)), extra=[...S.extras,...S.newExtras];
+  return {expected:S.orders.length, scanned:matched.length, missing, matched, extra, total:matched.length+extra.length};
 }
 function countsHtml(s){ return `<div class="counts">
   <div><b>${s.expected}</b><span>Expected</span></div><div><b>${s.scanned}</b><span>Scanned</span></div>
-  <div class="r"><b>${s.received}</b><span>Received</span></div><div class="m"><b>${s.missing.length}</b><span>Missing</span></div>
-  <div class="e"><b>${s.extra.length}</b><span>Extra</span></div></div>`; }
+  <div class="m"><b>${s.missing.length}</b><span>Missing</span></div><div class="e"><b>${s.extra.length}</b><span>Extra</span></div>
+  <div class="r"><b>${s.total}</b><span>Total picked</span></div></div>`; }
 function beep(){ try{navigator.vibrate&&navigator.vibrate(60);}catch(e){} }
+function resetStoreState(){ S.started=false; S.finished=false; S.scanned=new Set(); S.extras=new Set(); S.newExtras=new Set(); S.sel=new Set(); S.decisions=[]; S.batch=null; }
 
 /* ---------- screens ---------- */
-function login(){
-  S.runner=null; nav("ScanGate");
+function login(err){
+  S.runner=null; S.pin=null; nav("ScanGate");
   $("#app").innerHTML=`<div class="card"><h2>Runner login</h2>
-    <label for="rid">Runner ID</label><input id="rid" autocomplete="username" inputmode="text">
+    <label for="rid">Mobile number</label><input id="rid" autocomplete="username" inputmode="numeric">
     <label for="pin">PIN</label><input id="pin" type="password" inputmode="numeric" autocomplete="current-password">
-    <div id="err"></div><button class="btn" id="go">Log in</button>
-    <button class="btn alt" id="reg">New runner? Register</button></div>
-    ${API_URL?"":'<div class="msg info">Demo mode: enter any ID and PIN. The OTP is printed in the browser console.</div>'}`;
-  $("#reg").onclick=register;
+    <div id="err">${err?`<div class="msg err">${esc(err)}</div>`:""}</div><button class="btn" id="go">Log in</button>
+    <p style="margin:12px 0 0;color:var(--mute);font-size:14px">No account or forgot your PIN? Contact your manager.</p></div>`;
   $("#go").onclick=async()=>{
-    const id=$("#rid").value.trim(), pin=$("#pin").value.trim(); if(!id||!pin){$("#err").innerHTML='<div class="msg err">Enter your runner ID and PIN.</div>';return;}
+    const id=$("#rid").value.trim(), pin=$("#pin").value.trim(); if(!id||!pin){$("#err").innerHTML='<div class="msg err">Enter your mobile number and PIN.</div>';return;}
     S.runner=id;S.pin=pin; $("#go").disabled=true;
     try{ const r=await api("login"); if(!r.ok) throw new Error(r.error||"Login failed");
-      localStorage.setItem("rh_user",JSON.stringify({id,pin})); stores();
+      localStorage.setItem("rh_user",JSON.stringify({id,pin})); r.must_change_pin?changePin():stores();
     }catch(e){ S.runner=null;S.pin=null; $("#go").disabled=false; $("#err").innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
   };
 }
-async function register(){
-  nav("Register",login);
-  $("#app").innerHTML=`<div class="card"><h2>New runner registration</h2>
-    <label for="nid">Runner ID</label><input id="nid">
-    <label for="nname">Full name</label><input id="nname" autocomplete="name">
-    <label for="npin">Choose a PIN (4 to 6 digits)</label><input id="npin" type="password" inputmode="numeric" maxlength="6">
-    <label for="ncity">City</label><select id="ncity"><option value="">Select city</option></select>
-    <label for="nloc">Location</label><select id="nloc" disabled><option value="">Select city first</option></select>
-    <div id="err"></div><button class="btn" id="sub">Register</button></div>`;
-  let locs=[];
-  let lerr="";
-  try{ const r=await api("locations"); if(r.ok) locs=r.locations||[]; else lerr=r.error||"Unknown server reply"; }catch(e){ lerr="Could not reach the server: "+e.message; }
-  if(!locs.length){ $("#err").innerHTML='<div class="msg err">'+esc(lerr||"The Locations tab has no rows with both city and location filled.")+'</div>'; }
-  [...new Set(locs.map(l=>l.city))].forEach(c=>$("#ncity").insertAdjacentHTML("beforeend",`<option>${esc(c)}</option>`));
-  $("#ncity").onchange=()=>{ const c=$("#ncity").value; const l=locs.filter(x=>x.city===c);
-    $("#nloc").innerHTML=`<option value="">Select location</option>`+l.map(x=>`<option>${esc(x.location)}</option>`).join(""); $("#nloc").disabled=!c; };
-  $("#sub").onclick=async()=>{
-    const d={new_id:$("#nid").value.trim(),name:$("#nname").value.trim(),new_pin:$("#npin").value.trim(),city:$("#ncity").value,location:$("#nloc").value};
-    if(!d.new_id||!d.name||!d.new_pin||!d.city||!d.location){$("#err").innerHTML='<div class="msg err">Fill in all fields.</div>';return;}
-    if(!/^\d{4,6}$/.test(d.new_pin)){$("#err").innerHTML='<div class="msg err">PIN must be 4 to 6 digits.</div>';return;}
-    $("#sub").disabled=true;
-    try{ S.runner=null; const r=await api("register",d); if(!r.ok) throw new Error(r.error||"Registration failed");
-      S.runner=d.new_id;S.pin=d.new_pin; localStorage.setItem("rh_user",JSON.stringify({id:d.new_id,pin:d.new_pin})); isStandalone()?stores():installScreen();
-    }catch(e){ $("#sub").disabled=false; $("#err").innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+function changePin(){
+  nav("Set new PIN");
+  $("#app").innerHTML=`<div class="card"><h2>Set your own PIN</h2>
+    <p style="margin:0 0 4px;color:var(--mute)">You logged in with a PIN given to you. Choose a new PIN to continue.</p>
+    <label for="np1">New PIN (4 to 6 digits)</label><input id="np1" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password">
+    <label for="np2">Confirm new PIN</label><input id="np2" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password">
+    <div id="err"></div><button class="btn" id="save">Save PIN</button></div>`;
+  $("#save").onclick=async()=>{
+    const a=$("#np1").value.trim(), b=$("#np2").value.trim();
+    if(!/^\d{4,6}$/.test(a)){$("#err").innerHTML='<div class="msg err">PIN must be 4 to 6 digits.</div>';return;}
+    if(a!==b){$("#err").innerHTML='<div class="msg err">The two PINs do not match.</div>';return;}
+    if(a===S.pin){$("#err").innerHTML='<div class="msg err">Choose a PIN different from the current one.</div>';return;}
+    $("#save").disabled=true;
+    try{ const r=await api("change_pin",{new_pin:a}); if(!r.ok) throw new Error(r.error||"Could not save PIN");
+      S.pin=a; localStorage.setItem("rh_user",JSON.stringify({id:S.runner,pin:a})); stores();
+    }catch(e){ $("#save").disabled=false; $("#err").innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
   };
 }
 async function stores(){
   nav("Select store");
   $("#app").innerHTML=`<p style="color:var(--mute)">Loading stores…</p>`;
-  try{ const r=await api("stores"); if(!r.ok) throw new Error(r.error);
-    $("#app").innerHTML=installBanner()+(r.stores.length?"":`<div class="msg info">No pending stores right now.</div>`)+r.stores.map(s=>
-      `<button class="store" data-v="${esc(s.vendor)}" data-n="${esc(s.name)}"><span>${esc(s.name)}<small>${esc([s.vendor,s.location,s.city].filter(Boolean).join(' · '))}</small></span><b>${s.count}</b></button>`).join("");
-    document.querySelectorAll(".store").forEach(b=>b.onclick=()=>openStore(b.dataset.v,b.dataset.n)); wireBanner();
+  try{ const r=await api("stores"); if(!r.ok){ if(r.must_change_pin){changePin();return;} throw new Error(r.error); }
+    const list=r.stores; let html=installBanner();
+    if(!list.length) html+=`<div class="msg info">No stores with pending orders. If this looks wrong, contact your manager.</div>`;
+    else if(list.length>DROPDOWN_ABOVE) html+=`<div class="card"><h2>Select store</h2><select id="storeSel"><option value="">Choose a store</option>${list.map(s=>`<option value="${esc(s.vendor)}">${esc(s.name)} (${s.count} orders)</option>`).join("")}</select><button class="btn" id="storeGo" disabled>Open store</button></div>`;
+    else html+=list.map(s=>`<button class="store" data-v="${esc(s.vendor)}" data-n="${esc(s.name)}"><span>${esc(s.name)}<small>${esc([s.vendor,s.city].filter(Boolean).join(' · '))}</small></span><b>${s.count}</b></button>`).join("");
+    $("#app").innerHTML=html;
+    document.querySelectorAll(".store").forEach(b=>b.onclick=()=>openStore(b.dataset.v,b.dataset.n));
+    const sel=$("#storeSel"); if(sel){ sel.onchange=()=>{$("#storeGo").disabled=!sel.value;}; $("#storeGo").onclick=()=>openStore(sel.value,list.find(x=>x.vendor===sel.value).name); }
+    wireBanner();
   }catch(e){ $("#app").innerHTML=`<div class="msg err">${esc(e.message||"Could not load stores")}</div><button class="btn" onclick="stores()">Try again</button>`; }
 }
 async function openStore(vendor,name){
-  S.store={vendor,name}; S.started=false; S.finished=false; S.scanned=new Set(); S.extras=new Set(); S.batch=null;
+  S.store={vendor,name}; resetStoreState();
   nav(name,()=>{stopScan();stores();});
   $("#app").innerHTML=`<p style="color:var(--mute)">Loading orders…</p>`;
   try{ const r=await api("orders",{vendor}); if(!r.ok) throw new Error(r.error); S.orders=r.orders; scanScreen(); }
@@ -187,7 +178,7 @@ function scanScreen(){
 function render(){
   const s=stats(); $("#counts").innerHTML=countsHtml(s);
   const rows=S.orders.map(o=>S.scanned.has(o)?`<div class="row matched"><span>${esc(o)}</span><span class="tag">Scanned</span></div>`:S.finished?`<div class="row missing"><span>${esc(o)}</span><span class="tag">Missing</span></div>`:`<div class="row pending"><span>${esc(o)}</span><span class="tag">Not scanned</span></div>`);
-  const ex=[...S.extras].map(o=>`<div class="row extra"><span>${esc(o)}</span><span class="tag">Extra</span></div>`);
+  const ex=[...S.extras].map(o=>`<div class="row extra"><span>${esc(o)}</span><span class="tag">Extra</span></div>`).concat([...S.newExtras].map(o=>`<div class="row extra"><span>${esc(o)}</span><span class="tag">Extra · to confirm</span></div>`));
   $("#list").innerHTML=`<h2>Orders for this store</h2>${rows.join("")}${ex.length?`<h2 style="margin-top:14px">Extra orders</h2>${ex.join("")}`:""}`;
 }
 
@@ -207,29 +198,63 @@ async function stopScan(){
 }
 function onCode(raw){
   const code=String(raw).trim(); const now=Date.now();
-  if(!code||S.busy||!S.scanning&&S.scanner) return;
+  if(!code||(!S.scanning&&S.scanner)) return;
   if(code===S.lastScan&&now-S.lastAt<2500) return; S.lastScan=code;S.lastAt=now;
-  if(S.scanned.has(code)||S.extras.has(code)){ beep(); return; }
-  if(S.orders.includes(code)){ S.scanned.add(code); beep(); render(); return; }
-  S.busy=true; $("#extraId").textContent=code; $("#extraModal").classList.add("on");
+  if(S.scanned.has(code)||S.extras.has(code)||S.newExtras.has(code)){ beep(); return; }
+  if(S.orders.includes(code)) S.scanned.add(code);
+  else S.newExtras.add(code);          // not on this store's list: held as Extra, confirmed in the popup after Done scanning
+  beep(); render();
 }
-$("#acceptExtra").onclick=()=>{ S.extras.add($("#extraId").textContent); closeModal(); render(); };
-$("#rejectExtra").onclick=closeModal;
-function closeModal(){ $("#extraModal").classList.remove("on"); S.busy=false; S.lastAt=Date.now(); }
+
+/* ---------- extra orders popup (after Done scanning, only when there are new extras) ---------- */
+function openExtraPopup(){ S.sel=new Set(); renderPopup(); $("#extraModal").classList.add("on"); }
+function renderPopup(){
+  const list=[...S.newExtras];
+  $("#exTitle").textContent=`Extra orders (${list.length})`;
+  $("#exList").innerHTML=list.map(o=>`<label class="chk"><input type="checkbox" data-o="${esc(o)}" ${S.sel.has(o)?"checked":""}><span>${esc(o)}</span></label>`).join("");
+  $("#exList").querySelectorAll("input").forEach(i=>i.onchange=()=>{ i.checked?S.sel.add(i.dataset.o):S.sel.delete(i.dataset.o); syncPopup(); });
+  syncPopup();
+}
+function syncPopup(){
+  const n=S.newExtras.size, k=S.sel.size;
+  $("#exAll").checked=n>0&&k===n; $("#exAll").indeterminate=k>0&&k<n;
+  $("#exAccept").disabled=$("#exReject").disabled=REQUIRE_ALL_TICKED?(k!==n):(k===0);
+}
+$("#exAll").onchange=e=>{ S.sel=e.target.checked?new Set(S.newExtras):new Set(); renderPopup(); };
+$("#exBack").onclick=()=>{ $("#extraModal").classList.remove("on"); };
+$("#exAccept").onclick=()=>decide(true);
+$("#exReject").onclick=()=>decide(false);
+function decide(accept){
+  [...S.sel].forEach(o=>{
+    S.newExtras.delete(o);
+    if(accept) S.decisions.push({order_id:o,decision:"ACCEPTED"});             // returned to the store: removed from the runner's list
+    else { S.extras.add(o); S.decisions.push({order_id:o,decision:"REJECTED"}); } // kept: stays as Extra
+  });
+  S.sel=new Set(); render();
+  if(S.newExtras.size) renderPopup(); else { $("#extraModal").classList.remove("on"); submitDone(); }
+}
 
 /* ---------- done + OTP ---------- */
 async function doneScan(){
   await stopScan(); const s=stats();
-  if(!s.scanned){ alert("Scan at least one order first."); return; }
+  if(!S.batch&&!s.matched.length&&!s.extra.length){ alert("Scan at least one order first."); return; }
+  if(S.newExtras.size){ openExtraPopup(); return; }
+  submitDone();
+}
+async function submitDone(){
+  const s=stats();
+  if(!S.batch&&!s.matched.length&&!s.extra.length){ alert("No orders left to hand over."); scanScreen(); return; }
   S.finished=true; render(); $("#doneBtn").disabled=true; $("#doneBtn").textContent="Sending OTP…";
-  try{ const r=await api("done",{vendor:S.store.vendor,store:S.store.name,expected:S.orders,matched:s.matched,extra:s.extra});
-    if(!r.ok) throw new Error(r.error||"Could not create handover"); S.batch=r.batch_id; otpScreen();
+  try{ const r=await api("done",{vendor:S.store.vendor,store:S.store.name,matched:s.matched,extra:s.extra,decisions:S.decisions});
+    if(!r.ok){ if(r.must_change_pin){changePin();return;} throw new Error(r.error||"Could not create handover"); }
+    S.batch=r.batch_id; S.decisions=[]; otpScreen(r);
   }catch(e){ alert(e.message); S.finished=false; render(); $("#doneBtn").disabled=false; $("#doneBtn").textContent="Done scanning"; }
 }
-function otpScreen(){
+function otpScreen(r){
   const s=stats(); nav("Enter OTP",()=>{S.started=false;S.finished=false;scanScreen();});
+  const note=r&&r.unchanged?"No new orders scanned. The OTP already sent to the store is still valid for 10 minutes.":(r&&r.otp_sent?"A new OTP was emailed to the store. It is valid for 10 minutes.":"The OTP was emailed to the store.");
   $("#app").innerHTML=`${countsHtml(s)}
-    <div class="card"><h2>Ask the store for the OTP</h2><p style="margin:0 0 4px;color:var(--mute)">The OTP was emailed to the store. It is valid for 10 minutes.</p>
+    <div class="card"><h2>Ask the store for the OTP</h2><p style="margin:0 0 4px;color:var(--mute)">${note}</p>
     <label for="otp">OTP</label><input id="otp" class="otp" inputmode="numeric" maxlength="6" autocomplete="one-time-code">
     <div id="err"></div><button class="btn ok" id="verify">Confirm handover</button>
     <button class="btn alt" id="more">Scan more orders</button></div>
@@ -244,7 +269,7 @@ function otpScreen(){
 }
 function success(){
   const s=stats(); nav("Handover complete");
-  $("#app").innerHTML=`${countsHtml(s)}<div class="msg info">${s.received+s.extra.length} orders are now out for delivery.${s.missing.length?` ${s.missing.length} missing order(s) have been reported by email.`:""}</div>
+  $("#app").innerHTML=`${countsHtml(s)}<div class="msg info">${s.total} order${s.total===1?" is":"s are"} now out for delivery.${s.missing.length?` ${s.missing.length} missing order${s.missing.length===1?"":"s"} noted.`:""}</div>
     <button class="btn" onclick="stores()">Back to stores</button>`;
 }
 
@@ -253,21 +278,6 @@ let deferredInstall=null;
 window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();deferredInstall=e;});
 window.addEventListener("appinstalled",()=>{deferredInstall=null;});
 const isStandalone=()=>matchMedia("(display-mode: standalone)").matches||navigator.standalone===true;
-const isIOS=()=>/iphone|ipad|ipod/i.test(navigator.userAgent);
-function installHelp(){ return isIOS()?"Tap the Share button in Safari, then choose Add to Home Screen.":"Tap the browser menu (three dots), then choose Add to Home screen or Install app."; }
-function installScreen(){
-  nav("Add to home screen");
-  $("#app").innerHTML=`<div class="card"><h2>You are registered</h2>
-    <p style="margin:0 0 6px;color:var(--mute)">Add ScanGate to your home screen to open it in one tap.</p>
-    <div id="help"></div>
-    <button class="btn ok" id="inst">Add to home screen</button>
-    <button class="btn alt" id="skip">Skip for now</button></div>`;
-  $("#skip").onclick=stores;
-  $("#inst").onclick=async()=>{
-    if(deferredInstall){ deferredInstall.prompt(); try{ await deferredInstall.userChoice; }catch(e){} deferredInstall=null; stores(); }
-    else $("#help").innerHTML=`<div class="msg info">${installHelp()}</div>`;
-  };
-}
 function installBanner(){
   if(isStandalone()||!deferredInstall||localStorage.getItem("rh_noinstall")) return "";
   return `<div class="card" style="display:flex;gap:8px;align-items:center"><span style="flex:1">Add ScanGate to your home screen</span>
@@ -282,7 +292,13 @@ function wireBanner(){
 
 /* ---------- boot ---------- */
 $("#logout").onclick=()=>{localStorage.removeItem("rh_user");stopScan();login();};
-try{ const u=JSON.parse(localStorage.getItem("rh_user")||"null"); if(u){S.runner=u.id;S.pin=u.pin;stores();} else login(); }catch(e){ login(); }
+(async()=>{
+  let u=null; try{ u=JSON.parse(localStorage.getItem("rh_user")||"null"); }catch(e){}
+  if(!u){ login(); return; }
+  S.runner=u.id; S.pin=u.pin;
+  try{ const r=await api("login"); if(!r.ok){ localStorage.removeItem("rh_user"); login(r.error); return; } r.must_change_pin?changePin():stores(); }
+  catch(e){ stores(); }
+})();
 if("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js").catch(()=>{});
 </script>
 </body>
